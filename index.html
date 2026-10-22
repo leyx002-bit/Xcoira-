@@ -90,77 +90,11 @@ function orderRef(order) {
   return String(order.id).slice(-6).toUpperCase();
 }
 
-// ---------- TELEGRAM BOT NOTIFICATIONS ----------
-// Game orders and "sell airtime" submissions are sent to YOUR Telegram bot
-// so you can execute them by hand. Fill these in:
-//   TELEGRAM_BOT_TOKEN: from @BotFather (looks like 123456:ABC-DEF...)
-//   TELEGRAM_CHAT_ID:   your chat/group id. Message your bot, then open
-//                       https://api.telegram.org/bot<TOKEN>/getUpdates
-//                       and copy chat.id (groups start with -100).
-// WARNING: anything in this file is public. Anyone who views the page
-// source can read the token. Use a separate notify-only bot (not one
-// that holds anything valuable) and revoke it in @BotFather if abused.
-// When you add a backend, move this call there and delete the token here.
-const TELEGRAM_BOT_TOKEN = "";
-const TELEGRAM_CHAT_ID = "";
-
-// Returns true if Telegram accepted the message.
-async function notifyTelegram(text) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return false;
-  try {
-    const res = await fetch("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage", {
-      method: "POST",
-      // form-encoded keeps this a "simple" request (no CORS preflight)
-      body: new URLSearchParams({ chat_id: TELEGRAM_CHAT_ID, text }),
-    });
-    const data = await res.json();
-    return !!data.ok;
-  } catch (e) {
-    return false;
-  }
-}
-
-function gameOrderMessage(order, customerPhone) {
-  return [
-    "\uD83C\uDFAE NEW GAME ORDER (awaiting bank transfer)",
-    "Ref: " + orderRef(order),
-    "Game: " + order.productName,
-    "Package: " + order.tierLabel,
-    "Player: " + order.detail,
-    "Amount to receive: \u20A6" + Number(order.price).toLocaleString("en-NG"),
-    "Customer phone: " + (customerPhone || "n/a"),
-    "Do NOT top up until the payment shows in your bank.",
-  ].join("\n");
-}
-
-function paymentClaimedMessage(order, customerPhone) {
-  return [
-    "\uD83D\uDCB8 PAYMENT CLAIMED",
-    "Ref: " + orderRef(order),
-    order.productName + " \u00b7 " + order.tierLabel,
-    "Player: " + order.detail,
-    "Amount: \u20A6" + Number(order.price).toLocaleString("en-NG"),
-    "Customer phone: " + (customerPhone || "n/a"),
-    "Check your bank for this amount, then top up the game.",
-  ].join("\n");
-}
-
-function airtimeSaleMessage(sale, customerPhone) {
-  return [
-    "\uD83D\uDCF1 NEW AIRTIME SALE",
-    "Network: " + sale.network,
-    "Sent from: " + sale.phone,
-    "Amount sent: \u20A6" + Number(sale.amount).toLocaleString("en-NG"),
-    "PAY THEM: \u20A6" + Number(sale.payout).toLocaleString("en-NG"),
-    "Bank: " + sale.bankName,
-    "Account no: " + sale.accountNumber,
-    "Account name: " + sale.accountName,
-    "Request ref: " + String(sale.id).slice(-6).toUpperCase(),
-    "Customer phone: " + (customerPhone || "n/a"),
-    "Check the airtime arrived before paying.",
-  ].join("\n");
-}
-
+// ---------- TELEGRAM ALERTS ----------
+// Alerts are sent by database triggers inside Supabase (see telegram.sql),
+// so the bot token never appears in this page. Nothing to do here.
+const NOTIFY_ENABLED = false;
+async function notifyTelegram() { return true; }
 
 // ---------- SUPABASE BACKEND ----------
 // The publishable key is SAFE to expose: access is limited by the Row Level
@@ -1945,8 +1879,8 @@ function Xcoira() {
       // Pop the bank details up over the order screen straight away.
       if (order) setPayOrderId(order.id);
       // Then alert your Telegram bot (manual execution once payment lands).
-      const sent = order ? await notifyTelegram(gameOrderMessage(order, store.profile?.phone)) : false;
-      if (TELEGRAM_BOT_TOKEN && !sent) {
+      const sent = order ? await notifyTelegram("order", order.id) : false;
+      if (NOTIFY_ENABLED && !sent) {
         showToast("Order saved, but we couldn't alert support \u2014 please message us after paying");
       }
     } finally {
@@ -1969,9 +1903,9 @@ function Xcoira() {
   async function claimPayment(orderId) {
     const { error, order } = await api.markPaymentSent(store.userId, orderId);
     if (error) { showToast(error.message || "Couldn't update order"); return; }
-    const sent = order ? await notifyTelegram(paymentClaimedMessage(order, store.profile?.phone)) : false;
+    const sent = order ? await notifyTelegram("payment", order.id) : false;
     await refreshFromServer();
-    showToast(TELEGRAM_BOT_TOKEN && !sent
+    showToast(NOTIFY_ENABLED && !sent
       ? "Saved, but we couldn't alert support \u2014 please message us to confirm"
       : "Thanks! We'll deliver once your payment is confirmed.");
     setPayOrderId(null);
@@ -1988,9 +1922,9 @@ function Xcoira() {
     const network = AIRTIME_NETWORKS.find(n => n.id === networkId);
     const { error, sale } = await api.submitAirtimeSale(store.userId, network.name, phone, amount, bank);
     if (error) { showToast(error.message || "Couldn't submit \u2014 try again"); return; }
-    const sent = sale ? await notifyTelegram(airtimeSaleMessage(sale, store.profile?.phone)) : false;
+    const sent = sale ? await notifyTelegram("airtime", sale.id) : false;
     await refreshFromServer();
-    if (TELEGRAM_BOT_TOKEN && !sent) {
+    if (NOTIFY_ENABLED && !sent) {
       showToast("Request saved, but we couldn't reach support \u2014 please contact us to confirm");
     }
   }
